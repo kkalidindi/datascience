@@ -1,0 +1,110 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Kumar Kalidindi"
+date: "November 11, 2015"
+output: html_document
+---
+
+## Introduction
+
+The goal of this project is to predict the manner in which the subjects performed weight lifting exercises represented in the "classe" variable using any of the predictor variables from the training set. The report will describe how the model was built, how cross validation was used and the expected out of sample error while explaining why certain choices were made. The report will also use the model to predict 20 different test cases. 
+
+We acknowledge that the WLE dataset used in this project is credited to the paper published by Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13); Stuttgart, Germany; ACM SIGCHI, 2013.
+
+## Data Preparation
+
+```{r echo=FALSE}
+# Load libraries
+library(caret); library(ggplot2); library(pROC); library(randomForest); library(plyr)
+require(parallel); require(doParallel)
+```
+
+```{r echo=TRUE}
+# Read data into training & testing data frames
+pmltraining <- read.csv("pml-training.csv")
+pmltesting <- read.csv("pml-testing.csv")
+
+# Remove columns from both training & testing sets where over 90% of the values are NA or blank
+training <- pmltraining[,!colSums(is.na(pmltraining))==19216]
+training <- training[,-c(12:20,43:48,52:60,74:82)]
+testing <- pmltesting[,!colSums(is.na(pmltesting))==20]
+
+# Remove the first seven cols which are not related to measurments that we're interested in
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+
+# Calculate correlation matrix & remove predictors with correlation > abs(0.75)
+correlationMatrix <- abs(cor(training[,1:52]))
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+training <- training[,-highlyCorrelated]
+testing <- testing[,-highlyCorrelated]
+dim(training)
+dim(testing)
+```
+
+## Split training data to perform cross validation
+
+```{r echo=TRUE}
+# Split the "training" data into "train" & "test" sets so that we can perform cross-validation to estimate Out of Sample error estimates
+set.seed(1234)
+inTrain <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+train <- training[inTrain,]
+test <- training[-inTrain,]
+dim(train)
+dim(test)
+```
+
+## Build prediction model
+
+```{r echo=TRUE, cache=TRUE}
+# Setup cluster
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Train a model on the 'train' data using 3 fold cross validation
+set.seed(1234)
+modFit1 <- train(classe ~., data=train, trControl=trainControl(method="cv", number=3, seeds=NULL, allowParallel=TRUE))
+
+stopCluster(cl)
+
+# As you can see from the model statistics, three fold cross validation provided a good balance between computational complexity & accuracy.
+modFit1
+
+# Out of Bag estimate of error rate is 0.99% which is relatively low
+finalModel1 <- modFit1$finalModel
+finalModel1
+
+# Use the model to predict classe on test data that was never used in training the model (hold out from the original training set)
+prediction1 <- predict(modFit1, newdata=test)
+
+# The estimated Out of Sample error is 1 - Accuracy (0.9907) = 0.0093.  The 95% confidence level is (0.0117, 0.0073)
+confusionMatrix(prediction1, test$classe)
+
+```
+
+Applying machine learning algorithm "modFit1" to the 20 test cases in "testing"
+
+```{r}
+finalPredictions <- predict(modFit1, newdata=testing)
+finalPredictions
+```
+
+Creating individual files representing predictions for each of 20 cases for submission
+
+```{r}
+answers <- as.character(finalPredictions)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+```
+
+## Conclusion
+
+The Random Forest model provided a reasonably accurate prediction of the manner in which participants performed weight lifting exercises.  All 20 predictions of the "classe" variable matched actuals.
